@@ -111,3 +111,29 @@ misses nuanced cases. The combination catches both.
 **Trade-off:** Deterministic rules are auditable and predictable — we can
 explain every escalation decision. An LLM escalation judge would be less
 transparent and harder to tune.
+
+## 11. LLM model selection for generation and judging — iterative resolution
+**What we chose:** gemini-3.5-flash-lite for both generation and judging.
+**Why:** Three-step resolution:
+  1. Started with gemini-3.6-flash → hit 20 requests/day free tier cap immediately
+  2. Switched to gemini-2.0-flash-lite → model deprecated, no longer available
+  3. Switched to gemini-3.5-flash-lite → 1,500 requests/day, 15 RPM, currently available
+Added 5s inter-request delay to stay under 15 RPM limit.
+**Alternative considered:** Paying for a billing account to remove rate limits entirely.
+**Trade-off:** gemini-3.5-flash-lite is weaker than the originally intended
+gemini-3.6-flash, but sufficient for evaluation. This iterative model-hopping
+is itself a real-world finding worth documenting — model availability on free
+tiers changes faster than project timelines, and pinning model names in
+config.yaml (as we did) makes the swap a one-line change rather than a rewrite.
+
+## 12. Human agreement study — kappa 0.019 but 75.7% exact match
+**What we found:** Average Cohen's kappa of 0.019 (slight agreement) but
+75.7% exact score match rate. The low kappa is partly a statistical artifact
+— scores cluster at 4-5, compressing variance and deflating kappa even when
+humans and the judge broadly agree.
+**Key disagreement:** The LLM judge penalizes DM-redirection replies heavily
+(scores them 1/5) while human evaluators treat them as legitimate support
+practice (scores them 5/5). This is a real blind spot in the judge.
+**Conclusion:** The LLM judge is a useful signal but not fully trustworthy
+as a standalone evaluator — particularly for replies that use DM redirection
+as a resolution strategy. Human review remains essential for borderline cases.
