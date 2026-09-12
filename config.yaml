@@ -21,13 +21,13 @@ intent_classifier:
   main: "tfidf_logreg"
   confidence_threshold: 0.6
 generation:
-  provider: groq
-  model: llama-3.3-70b-versatile
+  provider: gemini
+  model: gemini-3.5-flash-lite
   max_tokens: 1024
   temperature: 0.3
 judge:
   provider: gemini
-  model: gemini-3.6-flash
+  model: gemini-3.5-flash-lite
   temperature: 0.0
 escalation:
   low_confidence_threshold: 0.6

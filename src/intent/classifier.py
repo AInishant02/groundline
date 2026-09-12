@@ -31,7 +31,7 @@ GOLDEN_FILE    = Path("evaluation/golden_set.csv")
 MODELS_DIR     = Path("data/processed/models")
 MODEL_NAME     = "sentence-transformers/all-MiniLM-L6-v2"
 SEED           = 42
-TRAIN_SAMPLE   = 8000   # threads to train/validate the baseline on
+TRAIN_SAMPLE   = 8000
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ def load_golden(path: Path) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Keyword labeller (same as golden_set.py — used to auto-label train data)
+# Keyword labeller
 # ---------------------------------------------------------------------------
 
 INTENT_SIGNALS = {
@@ -145,7 +145,7 @@ class TFIDFClassifier:
             stop_words="english",
             sublinear_tf=True,
         )
-        self.model   = LogisticRegression(
+        self.model = LogisticRegression(
             max_iter=1000,
             random_state=SEED,
             C=1.0,
@@ -154,7 +154,7 @@ class TFIDFClassifier:
         self.encoder = LabelEncoder()
         self.fitted  = False
 
-    def fit(self, texts: list[str], labels: list[str]):
+    def fit(self, texts: list, labels: list):
         print("[tfidf] Fitting TF-IDF + LogReg baseline ...")
         y = self.encoder.fit_transform(labels)
         X = self.vectorizer.fit_transform(texts)
@@ -165,33 +165,39 @@ class TFIDFClassifier:
     def predict(self, text: str) -> dict:
         X      = self.vectorizer.transform([text])
         proba  = self.model.predict_proba(X)[0]
-        top_idx   = np.argmax(proba)
-        top2      = np.argsort(proba)[-2:][::-1]
-        margin    = proba[top2[0]] - proba[top2[1]]
-        intent    = self.encoder.classes_[top_idx]
-        confidence = float(proba[top_idx])
+        top_idx = np.argmax(proba)
+        top2    = np.argsort(proba)[-2:][::-1]
+        margin  = proba[top2[0]] - proba[top2[1]]
+        intent  = self.encoder.classes_[top_idx]
 
         return {
-            "intent":      intent,
-            "confidence":  round(confidence, 4),
-            "margin":      round(float(margin), 4),
-            "all_scores":  {
+            "intent":     intent,
+            "confidence": round(float(proba[top_idx]), 4),
+            "margin":     round(float(margin), 4),
+            "all_scores": {
                 cls: round(float(p), 4)
                 for cls, p in zip(self.encoder.classes_, proba)
             },
-            "classifier":  "tfidf_logreg",
+            "classifier": "tfidf_logreg",
         }
 
     def save(self, path: Path):
+        import joblib
         path.mkdir(parents=True, exist_ok=True)
-        with open(path / "tfidf_classifier.pkl", "wb") as f:
-            pickle.dump(self, f)
-        print(f"[tfidf] Model saved to {path}/tfidf_classifier.pkl")
+        joblib.dump(self.vectorizer, path / "tfidf_vectorizer.joblib")
+        joblib.dump(self.model,      path / "tfidf_model.joblib")
+        joblib.dump(self.encoder,    path / "tfidf_encoder.joblib")
+        print(f"[tfidf] Model saved to {path}/tfidf_*.joblib")
 
     @classmethod
     def load(cls, path: Path) -> "TFIDFClassifier":
-        with open(path / "tfidf_classifier.pkl", "rb") as f:
-            return pickle.load(f)
+        import joblib
+        obj = cls()
+        obj.vectorizer = joblib.load(path / "tfidf_vectorizer.joblib")
+        obj.model      = joblib.load(path / "tfidf_model.joblib")
+        obj.encoder    = joblib.load(path / "tfidf_encoder.joblib")
+        obj.fitted     = True
+        return obj
 
 
 # ---------------------------------------------------------------------------
@@ -199,17 +205,10 @@ class TFIDFClassifier:
 # ---------------------------------------------------------------------------
 
 class EmbeddingClassifier:
-    """
-    For each intent, embed its positive examples from the taxonomy.
-    At inference time, embed the query and compute cosine similarity
-    against all intent prototype embeddings. Confidence = top similarity
-    score; margin = gap between top-2 intents.
-    """
-
     def __init__(self, taxonomy: dict):
         self.model    = SentenceTransformer(MODEL_NAME)
         self.taxonomy = taxonomy
-        self.intent_embeddings: dict[str, np.ndarray] = {}
+        self.intent_embeddings = {}
         self._build_prototypes()
 
     def _build_prototypes(self):
@@ -224,7 +223,6 @@ class EmbeddingClassifier:
                 normalize_embeddings=True,
                 show_progress_bar=False,
             )
-            # prototype = mean of example embeddings
             self.intent_embeddings[name] = embeddings.mean(axis=0)
         print(f"  Prototypes built for {len(self.intent_embeddings)} intents")
 
@@ -235,19 +233,16 @@ class EmbeddingClassifier:
             show_progress_bar=False,
         )[0]
 
-        scores = {}
-        for intent_name, proto in self.intent_embeddings.items():
-            # cosine similarity (embeddings are normalised → inner product)
-            scores[intent_name] = float(np.dot(query_emb, proto))
+        scores = {
+            name: float(np.dot(query_emb, proto))
+            for name, proto in self.intent_embeddings.items()
+        }
 
         sorted_intents = sorted(scores.items(), key=lambda x: -x[1])
         top_intent, top_score = sorted_intents[0]
-        second_score          = sorted_intents[1][1] if len(sorted_intents) > 1 else 0.0
-        margin                = top_score - second_score
-
-        # confidence = combination of similarity score and margin
-        # neither alone is sufficient — high similarity + low margin = ambiguous
-        confidence = round((top_score * 0.7 + margin * 0.3), 4)
+        second_score = sorted_intents[1][1] if len(sorted_intents) > 1 else 0.0
+        margin       = top_score - second_score
+        confidence   = round((top_score * 0.7 + margin * 0.3), 4)
 
         return {
             "intent":     top_intent,
@@ -260,15 +255,13 @@ class EmbeddingClassifier:
 
 
 # ---------------------------------------------------------------------------
-# Training + quick eval on golden set
+# Training + evaluation
 # ---------------------------------------------------------------------------
 
-def train_baseline(threads: list, golden: pd.DataFrame) -> TFIDFClassifier:
-    # auto-label threads for training
+def train_baseline(threads: list) -> TFIDFClassifier:
     texts  = [t["customer_opening"] for t in threads if t["customer_opening"].strip()]
     labels = [keyword_label(t) for t in texts]
-
-    clf = TFIDFClassifier()
+    clf    = TFIDFClassifier()
     clf.fit(texts, labels)
     clf.save(MODELS_DIR)
     return clf
@@ -282,32 +275,26 @@ def evaluate_on_golden(clf_tfidf: TFIDFClassifier,
     for _, row in golden.iterrows():
         msg   = row["customer_message"]
         label = row["intent_label"]
-
         pred_tfidf = clf_tfidf.predict(msg)
         pred_emb   = clf_emb.predict(msg)
-
         results.append({
-            "true":          label,
-            "pred_tfidf":    pred_tfidf["intent"],
-            "pred_emb":      pred_emb["intent"],
-            "conf_tfidf":    pred_tfidf["confidence"],
-            "conf_emb":      pred_emb["confidence"],
+            "true":       label,
+            "pred_tfidf": pred_tfidf["intent"],
+            "pred_emb":   pred_emb["intent"],
+            "conf_tfidf": pred_tfidf["confidence"],
+            "conf_emb":   pred_emb["confidence"],
         })
 
     df = pd.DataFrame(results)
-
     acc_tfidf = (df["true"] == df["pred_tfidf"]).mean()
     acc_emb   = (df["true"] == df["pred_emb"]).mean()
 
     print(f"\n  TF-IDF + LogReg accuracy:      {acc_tfidf:.3f}")
     print(f"  Embedding similarity accuracy: {acc_emb:.3f}")
-
     print("\n--- TF-IDF Classification Report ---")
     print(classification_report(df["true"], df["pred_tfidf"], zero_division=0))
-
     print("\n--- Embedding Classification Report ---")
     print(classification_report(df["true"], df["pred_emb"], zero_division=0))
-
     return df
 
 
@@ -325,22 +312,17 @@ def main():
     print("[classifier] Loading golden set ...")
     golden = load_golden(GOLDEN_FILE)
 
-    # train baseline
-    clf_tfidf = train_baseline(threads, golden)
+    clf_tfidf = train_baseline(threads)
 
-    # build embedding classifier
     print("\n[classifier] Building embedding classifier ...")
     clf_emb = EmbeddingClassifier(taxonomy)
 
-    # evaluate both on golden set
     results_df = evaluate_on_golden(clf_tfidf, clf_emb, golden)
 
-    # save results
     results_path = Path("data/processed/classifier_results.csv")
     results_df.to_csv(results_path, index=False)
     print(f"\n[classifier] Results saved to {results_path}")
 
-    # save embedding classifier
     with open(MODELS_DIR / "embedding_classifier.pkl", "wb") as f:
         pickle.dump(clf_emb, f)
     print(f"[classifier] Embedding classifier saved to {MODELS_DIR}/embedding_classifier.pkl")

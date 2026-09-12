@@ -12,6 +12,7 @@ Usage (as module):
 import os
 import re
 import json
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
@@ -20,7 +21,7 @@ from google.genai import types
 load_dotenv()
 
 BRAND        = "SpotifyCares"
-MODEL_NAME   = "gemini-3.6-flash"
+MODEL_NAME   = "gemini-3.5-flash-lite"
 MAX_TOKENS   = 1024
 TEMPERATURE  = 0.3
 
@@ -39,10 +40,6 @@ STRICT RULES - you must follow all of these:
 - If evidence is insufficient, say so and ask for more information or suggest escalation
 - Keep replies under 280 characters where possible (Twitter/X limit)
 - Match Spotify's tone: friendly, concise, uses the customer's name if available, ends with initials like /AB
-
-For each reply, you must also output:
-SUPPORTED_BY_EVIDENCE: <yes/partial/no>
-UNSUPPORTED_CLAIMS: <list any claims not backed by evidence, or 'none'>
 
 Format your response as JSON:
 {
@@ -98,47 +95,53 @@ class ReplyGenerator:
     def generate(self, message: str, context: str, retrieved: list) -> dict:
         prompt = build_prompt(message, context, retrieved)
 
-        try:
-            response = self.client.models.generate_content(
-                model=MODEL_NAME,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=TEMPERATURE,
-                    max_output_tokens=MAX_TOKENS,
-                ),
-            )
-            raw    = response.text.strip()
-            clean  = re.sub(r"```json|```", "", raw).strip()
-            parsed = json.loads(clean)
+        for attempt in range(3):
+            try:
+                response = self.client.models.generate_content(
+                    model=MODEL_NAME,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=TEMPERATURE,
+                        max_output_tokens=MAX_TOKENS,
+                    ),
+                )
+                raw    = response.text.strip()
+                clean  = re.sub(r"```json|```", "", raw).strip()
+                parsed = json.loads(clean)
 
-            return {
-                "draft_reply":           parsed.get("draft_reply", ""),
-                "supported_by_evidence": parsed.get("supported_by_evidence", "no"),
-                "unsupported_claims":    parsed.get("unsupported_claims", "unknown"),
-                "evidence_used":         parsed.get("evidence_used", []),
-                "raw_response":          raw,
-                "error":                 None,
-            }
+                return {
+                    "draft_reply":           parsed.get("draft_reply", ""),
+                    "supported_by_evidence": parsed.get("supported_by_evidence", "no"),
+                    "unsupported_claims":    parsed.get("unsupported_claims", "unknown"),
+                    "evidence_used":         parsed.get("evidence_used", []),
+                    "raw_response":          raw,
+                    "error":                 None,
+                }
 
-        except json.JSONDecodeError as e:
-            return {
-                "draft_reply":           "",
-                "supported_by_evidence": "no",
-                "unsupported_claims":    "parse error",
-                "evidence_used":         [],
-                "raw_response":          raw if "raw" in dir() else "",
-                "error":                 f"JSON parse error: {e}",
-            }
-        except Exception as e:
-            return {
-                "draft_reply":           "",
-                "supported_by_evidence": "no",
-                "unsupported_claims":    "generation error",
-                "evidence_used":         [],
-                "raw_response":          "",
-                "error":                 str(e),
-            }
+            except json.JSONDecodeError as e:
+                return {
+                    "draft_reply":           "",
+                    "supported_by_evidence": "no",
+                    "unsupported_claims":    "parse error",
+                    "evidence_used":         [],
+                    "raw_response":          raw if "raw" in dir() else "",
+                    "error":                 f"JSON parse error: {e}",
+                }
+
+            except Exception as e:
+                print(f"    [generator] Attempt {attempt+1}/3 failed: {e}")
+                if attempt < 2:
+                    time.sleep(30)
+                    continue
+                return {
+                    "draft_reply":           "",
+                    "supported_by_evidence": "no",
+                    "unsupported_claims":    "generation error",
+                    "evidence_used":         [],
+                    "raw_response":          "",
+                    "error":                 str(e),
+                }
 
 
 if __name__ == "__main__":
@@ -148,18 +151,9 @@ if __name__ == "__main__":
     generator = ReplyGenerator()
 
     test_cases = [
-        {
-            "message": "my spotify keeps crashing after the latest update on iPhone",
-            "context": "",
-        },
-        {
-            "message": "I was charged twice this month, this is unacceptable",
-            "context": "",
-        },
-        {
-            "message": "someone logged into my account from a different country",
-            "context": "",
-        },
+        {"message": "my spotify keeps crashing after the latest update on iPhone", "context": ""},
+        {"message": "I was charged twice this month, this is unacceptable", "context": ""},
+        {"message": "someone logged into my account from a different country", "context": ""},
     ]
 
     for tc in test_cases:
@@ -167,10 +161,8 @@ if __name__ == "__main__":
         print(f"Message: {tc['message']}")
         retrieved = retriever.retrieve(tc["message"], k=3)
         result    = generator.generate(tc["message"], tc["context"], retrieved)
-
         print(f"Draft reply:   {result['draft_reply']}")
         print(f"Evidence:      {result['supported_by_evidence']}")
         print(f"Unsupported:   {result['unsupported_claims']}")
-        print(f"Evidence used: {result['evidence_used']}")
         if result["error"]:
             print(f"ERROR: {result['error']}")
