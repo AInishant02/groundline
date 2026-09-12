@@ -126,14 +126,18 @@ is itself a real-world finding worth documenting — model availability on free
 tiers changes faster than project timelines, and pinning model names in
 config.yaml (as we did) makes the swap a one-line change rather than a rewrite.
 
-## 12. Human agreement study — kappa 0.019 but 75.7% exact match
-**What we found:** Average Cohen's kappa of 0.019 (slight agreement) but
-75.7% exact score match rate. The low kappa is partly a statistical artifact
-— scores cluster at 4-5, compressing variance and deflating kappa even when
-humans and the judge broadly agree.
-**Key disagreement:** The LLM judge penalizes DM-redirection replies heavily
-(scores them 1/5) while human evaluators treat them as legitimate support
-practice (scores them 5/5). This is a real blind spot in the judge.
-**Conclusion:** The LLM judge is a useful signal but not fully trustworthy
-as a standalone evaluator — particularly for replies that use DM redirection
-as a resolution strategy. Human review remains essential for borderline cases.
+## 12. Human agreement study — kappa 0.327, Pearson 0.787
+**What we found:** Average Cohen's kappa of 0.327 (fair agreement) and
+Pearson correlation of 0.787 (strong) across 30 examples and 7 dimensions.
+Human and LLM judge track the same quality signal reliably, but systematic
+offset exists — human scores trend ~0.25 points lower on average.
+**Key disagreement:** DM-redirection replies scored differently — human
+penalizes them for not directly answering (safety: 1, conciseness: 1),
+LLM judge treats them as safe and brief (safety: 3, conciseness: 4).
+This reveals a genuine blind spot: the judge rewards brevity and safety
+but doesn't penalize unhelpful deflection as harshly as a human would.
+**Conclusion:** LLM judge is a useful but imperfect signal. Strong for
+safety and brand_consistency (highest agreement), weakest for overall
+and correctness. Human review essential for borderline escalation cases.
+**Note:** Initial scoring was done randomly and discarded. These scores
+reflect genuine careful evaluation of all 30 reply pairs.
