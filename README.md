@@ -33,7 +33,7 @@ Copy `.env.example` to `.env` and fill in:
 
 | Variable | Used for |
 |---|---|
-| `GROQ_API_KEY` | Grounded reply generation |
+| `GEMINI_API_KEY` | Grounded reply generation |
 | `GEMINI_API_KEY` | Independent LLM-as-judge (deliberately a different provider than generation) |
 | `KAGGLE_USERNAME` / `KAGGLE_KEY` | Only needed if you don't already have `~/.kaggle/kaggle.json` |
 
