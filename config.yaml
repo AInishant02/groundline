@@ -1,0 +1,38 @@
+seed: 42
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  golden_dir: data/golden
+  kaggle_dataset: thoughtvector/customer-support-on-twitter
+brand:
+  name: SpotifyCares
+  handle: SpotifyCares
+taxonomy:
+  path: src/taxonomy/taxonomy.yaml
+  min_intents: 8
+  max_intents: 15
+retrieval:
+  embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  index_path: data/processed/faiss.index
+  top_k: 5
+  min_similarity: 0.55
+intent_classifier:
+  baseline: tfidf_logreg
+  main: "tfidf_logreg"
+  confidence_threshold: 0.6
+generation:
+  provider: groq
+  model: llama-3.3-70b-versatile
+  max_tokens: 1024
+  temperature: 0.3
+judge:
+  provider: gemini
+  model: gemini-3.6-flash
+  temperature: 0.0
+escalation:
+  low_confidence_threshold: 0.6
+  weak_retrieval_similarity: 0.55
+  ambiguity_margin: 0.1
+golden_set:
+  path: evaluation/golden_set.csv
+  target_size: 200
